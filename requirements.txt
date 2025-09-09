@@ -1,7 +1,5 @@
 streamlit
 pandas
 numpy
-Aqar → https://sa.aqar.fm
-Bayut → https://www.bayut.sa
-Property Finder → https://www.propertyfinder.sa
-Haraj → https://haraj.com.sa
+requests
+python-dotenv
