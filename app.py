@@ -1,16 +1,25 @@
 """
-Riyadh Apartment Finder – Bilingual (Arabic/English) + WhatsApp Contact Buttons
------------------------------------------------------------------------------
-Adds per‑listing WhatsApp contact buttons with a global fallback phone number and
-customizable message template. Also extends CSV templates/schema with
-`contact_phone`.
+Riyadh Apartment Finder – API Stub Version (Streamlit)
+-----------------------------------------------------
+Single‑file Streamlit app with:
+  • Bilingual UI (Arabic/English)
+  • CSV uploads + templates (Aqar, Bayut, Property Finder, Haraj, Generic)
+  • WhatsApp contact button per listing (uses `contact_phone` column or sidebar fallback)
+  • **API integration stubs** for Bayut and Property Finder (placeholders you can later wire to real partner APIs)
 
 Run:
-    streamlit run app_whatsapp.py
+    streamlit run app_api_stubs.py
+
+Requirements (minimal):
+    streamlit, pandas, numpy
+Optional (for real API calls later):
+    requests, python-dotenv
+
+⚠️ Important: Many marketplaces prohibit scraping and restrict API access to partners.
+Use official, documented endpoints and respect each provider's Terms of Service.
 """
 from __future__ import annotations
 import ast
-import io
 import json
 import re
 import textwrap
@@ -22,6 +31,10 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# If you plan to call partner APIs later, uncomment the two lines below
+# import requests
+# from requests import Session
 
 # =============================
 # Language & District Mappings
@@ -50,6 +63,7 @@ DISTRICT_MAP_EN_TO_AR = {
 DISTRICTS_EN = list(DISTRICT_MAP_EN_TO_AR.keys())
 DISTRICT_MAP_AR_TO_EN = {v: k for k, v in DISTRICT_MAP_EN_TO_AR.items()}
 
+# Approximate district centroids (for plotting when lat/lon not provided)
 DISTRICT_CENTROIDS = {
     "Al Murooj": (24.7492, 46.6768),
     "Al Maseef": (24.7466, 46.6394),
@@ -65,10 +79,10 @@ DISTRICT_CENTROIDS = {
 # UI Text (i18n)
 # =============================
 UI = {
-    "title": {"English": "Riyadh Apartment Finder – WhatsApp Enabled", "العربية": "باحث شقق الرياض – مع واتساب"},
+    "title": {"English": "Riyadh Apartment Finder – API Stub Version", "العربية": "باحث شقق الرياض – نسخة واجهات برمجية (تجريبية)"},
     "caption": {
-        "English": "Filter apartments and contact the agent on WhatsApp with a single click.",
-        "العربية": "صفِّ الشقق وتواصل مع المعلن عبر واتساب بضغطة واحدة.",
+        "English": "Filter apartments, upload CSVs, and prepare for partner APIs (Bayut/Property Finder).",
+        "العربية": "صفِّ الشقق، ارفع ملفات CSV، وجهّز للتكامل مع واجهات الشركاء (بيوت/بروبرتي فايندر).",
     },
     "language": {"English": "Language", "العربية": "اللغة"},
     "providers": {"English": "Data Providers", "العربية": "مصادر البيانات"},
@@ -110,13 +124,17 @@ UI = {
     "whats_phone": {"English": "Default WhatsApp phone (+966…)", "العربية": "رقم واتساب الافتراضي (+966…)"},
     "whats_msg": {"English": "Message template", "العربية": "قالب الرسالة"},
     "whats_button": {"English": "WhatsApp agent", "العربية": "مراسلة واتساب"},
+    "apis": {"English": "API Integrations (stubs)", "العربية": "تكاملات API (تجريبية)"},
+    "bayut_enable": {"English": "Enable Bayut API (stub)", "العربية": "تفعيل API بيوت (تجريبي)"},
+    "pf_enable": {"English": "Enable Property Finder API (stub)", "العربية": "تفعيل API بروبرتي فايندر (تجريبي)"},
+    "api_note": {"English": "Provide partner credentials/endpoints if you have access.", "العربية": "أدخل بيانات الشريك ونقاط النهاية إذا كان لديك صلاحية."},
 }
 
 def T(key: str, lang: str) -> str:
     return UI.get(key, {}).get(lang, key)
 
 # =============================
-# Normalized Schema (extended with contact_phone)
+# Normalized Schema (contact_phone included for WhatsApp)
 # =============================
 @dataclass
 class Listing:
@@ -142,10 +160,8 @@ class Listing:
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "Listing":
         def to_bool(x):
-            if pd.isna(x):
-                return None
-            if isinstance(x, bool):
-                return x
+            if pd.isna(x): return None
+            if isinstance(x, bool): return x
             s = str(x).strip().lower()
             if s in {"true","yes","y","1","furnished","مفروشة"}: return True
             if s in {"false","no","n","0","unfurnished","غير مفروشة"}: return False
@@ -165,8 +181,7 @@ class Listing:
 
         def to_float(x):
             try:
-                if pd.isna(x) or x == "":
-                    return None
+                if pd.isna(x) or x == "": return None
                 return float(str(x).replace(",", "").strip())
             except Exception:
                 return None
@@ -179,20 +194,17 @@ class Listing:
         def norm_district(x):
             s = to_str(x)
             if not s: return None
-            if s in DISTRICT_MAP_AR_TO_EN:
-                return DISTRICT_MAP_AR_TO_EN[s]
+            if s in DISTRICT_MAP_AR_TO_EN: return DISTRICT_MAP_AR_TO_EN[s]
             return s
 
         def coord_lat(x):
             v = to_float(x)
-            if v is None or not (-90 <= v <= 90):
-                return None
+            if v is None or not (-90 <= v <= 90): return None
             return v
 
         def coord_lon(x):
             v = to_float(x)
-            if v is None or not (-180 <= v <= 180):
-                return None
+            if v is None or not (-180 <= v <= 180): return None
             return v
 
         return Listing(
@@ -217,19 +229,18 @@ class Listing:
         )
 
 # =============================
-# Streamlit Setup
+# Page setup
 # =============================
-st.set_page_config(page_title="Riyadh Apartment Finder – WhatsApp", layout="wide", page_icon="🏙️")
-
+st.set_page_config(page_title="Riyadh Apartment Finder – API Stubs", layout="wide", page_icon="🏙️")
 with st.sidebar:
-    lang = st.selectbox("Language / اللغة", LANGS, index=0)
+    lang = st.selectbox(T("language", "English"), LANGS, index=0)
 
 st.title(T("title", lang))
 st.caption(T("caption", lang))
 
-# -----------------------------
-# Providers & Templates (extended schema)
-# -----------------------------
+# =============================
+# Providers & CSV Templates
+# =============================
 with st.sidebar:
     st.header(T("providers", lang))
     use_dummy = st.checkbox(T("dummy", lang), value=True)
@@ -260,9 +271,9 @@ with cC: st.download_button("Bayut CSV", data=make_template("bayut"), file_name=
 with cD: st.download_button("PropertyFinder CSV", data=make_template("property_finder"), file_name="template_property_finder.csv")
 with cE: st.download_button("Haraj CSV", data=make_template("haraj"), file_name="template_haraj.csv")
 
-# -----------------------------
+# =============================
 # Normalization helpers
-# -----------------------------
+# =============================
 @st.cache_data(show_spinner=False)
 def _normalize_df(df: pd.DataFrame, provider_name: str) -> pd.DataFrame:
     col_map = {
@@ -319,7 +330,7 @@ def provider_from_csv(name: str, file) -> pd.DataFrame:
 
 
 def provider_dummy(districts_en: List[str], n: int = 40, for_rent: bool = True) -> pd.DataFrame:
-    rng = np.random.default_rng(11)
+    rng = np.random.default_rng(17)
     choices = districts_en or DISTRICTS_EN[:6]
     rows = []
     for i in range(n):
@@ -355,7 +366,43 @@ def provider_dummy(districts_en: List[str], n: int = 40, for_rent: bool = True) 
     return pd.DataFrame(rows)
 
 # =============================
-# Filters + WhatsApp defaults
+# API Integration Stubs (placeholders)
+# =============================
+@st.cache_data(show_spinner=False)
+def bayut_api_stub(base_url: str, api_key: str, params: Dict[str, Any]) -> pd.DataFrame:
+    """Placeholder for Bayut partner API.
+    Expected to return a DataFrame in the normalized schema. For now, we just
+    return an empty DataFrame with the proper columns.
+
+    Example future call:
+        url = f"{base_url.rstrip('/')}/listings"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+        # TODO: map payload fields -> normalized schema rows
+    """
+    return pd.DataFrame(columns=TEMPLATE_COLUMNS)
+
+
+@st.cache_data(show_spinner=False)
+def property_finder_api_stub(base_url: str, client_id: str, client_secret: str, params: Dict[str, Any]) -> pd.DataFrame:
+    """Placeholder for Property Finder partner API.
+    If an OAuth token is required, first exchange client credentials for an access token,
+    then call the listings endpoint and map to the normalized schema.
+
+    Example future call:
+        token_url = f"{base_url.rstrip('/')}/oauth/token"
+        token = requests.post(token_url, data={"client_id": client_id, "client_secret": client_secret, "grant_type": "client_credentials"}).json()["access_token"]
+        url = f"{base_url.rstrip('/')}/listings"
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30)
+        payload = resp.json()
+        # TODO: map payload -> normalized rows
+    """
+    return pd.DataFrame(columns=TEMPLATE_COLUMNS)
+
+# =============================
+# Filters + WhatsApp defaults + API settings
 # =============================
 with st.sidebar:
     st.header(T("filters", lang))
@@ -388,12 +435,31 @@ with st.sidebar:
         help="Available placeholders: {title}, {district}, {price}, {period}, {url}"
     )
 
+    st.divider()
+    st.subheader(T("apis", lang))
+    st.caption(T("api_note", lang))
+
+    # Bayut stub controls
+    bayut_enabled = st.checkbox(T("bayut_enable", lang), value=False)
+    bayut_base = st.text_input("Bayut Base URL", value="https://api.bayut.sa")
+    bayut_key = st.text_input("Bayut API Key", type="password")
+
+    # Property Finder stub controls
+    pf_enabled = st.checkbox(T("pf_enable", lang), value=False)
+    pf_base = st.text_input("Property Finder Base URL", value="https://api.propertyfinder.sa")
+    pf_client_id = st.text_input("PF Client ID")
+    pf_client_secret = st.text_input("PF Client Secret", type="password")
+
 # =============================
 # Ingest data
 # =============================
-frames = []
+frames: List[pd.DataFrame] = []
+
+# Dummy data
 if use_dummy:
     frames.append(provider_dummy(selected_en, n=40, for_rent=(purpose==T("rent", lang))))
+
+# CSV uploads
 if aqar_csv is not None:
     frames.append(provider_from_csv("aqar", aqar_csv))
 if bayut_csv is not None:
@@ -403,14 +469,31 @@ if pf_csv is not None:
 if haraj_csv is not None:
     frames.append(provider_from_csv("haraj", haraj_csv))
 
-if frames:
-    data = pd.concat(frames, ignore_index=True)
-else:
-    data = pd.DataFrame(columns=[f for f in TEMPLATE_COLUMNS])
+# API stubs (currently return empty frames with normalized columns)
+api_params = {
+    "districts": selected_en,
+    "purpose": "rent" if purpose==T("rent", lang) else "sale",
+    "min_price": min_price,
+    "max_price": max_price,
+    "bedrooms_min": br_min,
+    "bedrooms_max": br_max,
+}
 
-# Purpose filter
+if bayut_enabled and bayut_base and bayut_key:
+    frames.append(bayut_api_stub(bayut_base, bayut_key, api_params))
+
+if pf_enabled and pf_base and pf_client_id and pf_client_secret:
+    frames.append(property_finder_api_stub(pf_base, pf_client_id, pf_client_secret, api_params))
+
+# Combine
+if frames:
+    data = pd.concat(frames, ignore_index=True, sort=False)
+else:
+    data = pd.DataFrame(columns=TEMPLATE_COLUMNS)
+
+# Purpose filter (rent vs sale) using price_period
 if purpose == T("rent", lang):
-    data = data[(data["price_period"].str.lower() == "monthly") | (data["price_period"].str.lower() == "yearly") | (data["price_period"].isna())]
+    data = data[(data["price_period"].astype(str).str.lower() == "monthly") | (data["price_period"].astype(str).str.lower() == "yearly") | (data["price_period"].isna())]
 else:
     data = data[data["price_period"].isna()]
 
@@ -419,9 +502,9 @@ if selected_en:
     data = data[data["district"].isin(selected_en)]
 
 # Numeric filters
-between = lambda s, lo, hi: s.astype(float).fillna(-1e15).between(lo, hi)
+between = lambda s, lo, hi: pd.to_numeric(s, errors="coerce").fillna(-1e15).between(lo, hi)
 data = data[between(data["price_sar"], min_price, max_price)]
-data = data[(data["bedrooms"].fillna(br_min).astype(float) >= br_min) & (data["bedrooms"].fillna(br_max).astype(float) <= br_max)]
+data = data[(pd.to_numeric(data["bedrooms"], errors="coerce").fillna(br_min) >= br_min) & (pd.to_numeric(data["bedrooms"], errors="coerce").fillna(br_max) <= br_max)]
 data = data[between(data["size_sqm"], size_min, size_max)]
 
 if furn_choice != T("any", lang):
@@ -438,13 +521,13 @@ if sort_by == T("newest", lang):
     data["_parsed_date"] = data["date_posted"].apply(parse_date)
     data = data.sort_values("_parsed_date", ascending=False)
 elif sort_by == T("price_lh", lang):
-    data = data.sort_values("price_sar", ascending=True, na_position="last")
+    data = data.sort_values(pd.to_numeric(data["price_sar"], errors="coerce"), ascending=True, na_position="last")
 elif sort_by == T("price_hl", lang):
-    data = data.sort_values("price_sar", ascending=False, na_position="last")
+    data = data.sort_values(pd.to_numeric(data["price_sar"], errors="coerce"), ascending=False, na_position="last")
 elif sort_by == T("size_ls", lang):
-    data = data.sort_values("size_sqm", ascending=False, na_position="last")
+    data = data.sort_values(pd.to_numeric(data["size_sqm"], errors="coerce"), ascending=False, na_position="last")
 
-# Dedup
+# Deduplicate
 if not data.empty:
     key1 = data["provider"].fillna("") + "|" + data["listing_id"].fillna("")
     key2 = data["title"].fillna("") + "|" + data["district"].fillna("") + "|" + data["price_sar"].fillna(-1).astype(str)
@@ -452,7 +535,7 @@ if not data.empty:
     data = data.loc[~key2.duplicated(keep="first")]
 
 # =============================
-# Helpers – WhatsApp link builder
+# WhatsApp helpers
 # =============================
 PHONE_DIGITS = re.compile(r"\D+")
 
@@ -460,11 +543,11 @@ def clean_phone(phone: Optional[str]) -> Optional[str]:
     if not phone: return None
     digits = PHONE_DIGITS.sub("", str(phone))
     if not digits: return None
-    # If user typed leading 0 format (e.g., 05xxxxxxxx), try to convert to +9665xxxxxxxx
+    # If user typed leading 0 (e.g., 05xxxxxxxx), convert -> 9665xxxxxxxx
     if digits.startswith("0") and len(digits) >= 9:
         digits = "966" + digits.lstrip("0")
-    # Ensure country code present (assume KSA if missing and length ~9)
-    if len(digits) in (9, 10) and not digits.startswith("966"):
+    # If no country code and looks like KSA mobile length, prepend 966
+    if len(digits) in (9,10) and not digits.startswith("966"):
         digits = "966" + digits[-9:]
     return digits
 
@@ -480,7 +563,8 @@ with left:
     st.subheader(T("summary", lang))
     st.metric(T("listings_found", lang), len(data))
     if len(data):
-        med_price = int(np.nanmedian(pd.to_numeric(data["price_sar"], errors="coerce"))) if not pd.to_numeric(data["price_sar"], errors="coerce").dropna().empty else 0
+        med_price_series = pd.to_numeric(data["price_sar"], errors="coerce")
+        med_price = int(np.nanmedian(med_price_series)) if not med_price_series.dropna().empty else 0
         st.metric(T("median_price", lang), med_price)
         pps = (pd.to_numeric(data["price_sar"], errors="coerce") / pd.to_numeric(data["size_sqm"], errors="coerce")).replace([np.inf,-np.inf], np.nan)
         pps_med = int(np.nanmedian(pps)) if not pps.dropna().empty else 0
@@ -494,7 +578,7 @@ with right:
         st.map(map_df[["latitude","longitude"]], size=16)
 
 # =============================
-# Results grid (with WhatsApp button)
+# Results grid
 # =============================
 st.subheader(T("results", lang))
 
@@ -543,7 +627,7 @@ else:
                 if row.get("url"):
                     st.link_button(T("open", lang), row["url"], use_container_width=True)
 
-                # WhatsApp button logic
+                # WhatsApp button
                 phone_raw = row.get("contact_phone") or default_phone
                 phone = clean_phone(phone_raw)
                 if phone:
@@ -573,3 +657,28 @@ else:
         st.download_button("Download shortlist (CSV)", data=csv, file_name="shortlist_riyadh.csv")
     else:
         st.caption(T("no_shortlist", lang))
+
+# =============================
+# Developer Notes
+# =============================
+st.divider()
+st.subheader("Developer Notes – Wiring Real APIs")
+st.markdown(
+    """
+    **Bayut (partner)**
+    - Replace `bayut_api_stub` with a real implementation.
+    - Add authentication (Bearer token) and map the payload to the normalized schema.
+
+    **Property Finder (partner)**
+    - Replace `property_finder_api_stub` with a real implementation.
+    - If OAuth2 is required, obtain an access token first.
+
+    **General mapping tips**
+    - Always populate: `provider, listing_id, title, price_sar, price_period, bedrooms, bathrooms, size_sqm, furnished, district, city, latitude, longitude, url, images, description, date_posted, contact_phone`.
+    - If coordinates are missing but district exists, we fallback to centroids for map visualization.
+
+    **Compliance**
+    - Use only official/approved endpoints and follow each provider's ToS.
+    - Avoid scraping; negotiate partner access where possible.
+    """
+)
